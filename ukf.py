@@ -5,6 +5,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 
 
+innovations = []
 
 def time_difference_in_seconds(d1, d2):
 	d = d1-d2
@@ -86,18 +87,18 @@ def parse_sample_data_OARS(filename):
 						if line[3] != "" and line[4] != "" and line[5] != "" and line[6] != "":
 							lines.append(line[1:8])
 					except Exception as e:
-						print e
+						# print e
 						pass
 
 	lines = sorted(lines, key=lambda x: float(x[0]))
 	for line in lines:
-		print line
+		# print line
 		datetime_object = float(line[0])
-		print datetime_object
+		# print datetime_object
 		if len(t) == 0:
 			t0 = datetime_object
 
-		print datetime_object - t0
+		# print datetime_object - t0
 
 		t.append((datetime_object-t0)/1000.)
 		a.append([float(line[1]), float(line[2]), float(line[3])])
@@ -187,6 +188,7 @@ def madgwick_update(Q, a, dt, beta):
 	Q_new[2] -= beta * s[2,0] * dt;
 	Q_new[3] -= beta * s[3,0] * dt;
 	Q_new = normalize_quaterion(Q_new)
+
 	return Q_new
 
 
@@ -196,7 +198,7 @@ def standard_integration(rpy, g, dt):
 	rpy[2] = rpy[2] + g[2]*dt
 	return rpy
 
-def unscented_transformation(X, P, alpha=0.01, beta=2., kappa=0.1):
+def unscented_transformation(X, P, alpha=0.001, beta=2., kappa=0.):
 	# X is the state vector at time k-1, n x 1
 	# P is the uncertainty matrix at time k-1, n x n
 	# P[np.abs(P) < 10e-6] = 0.
@@ -340,7 +342,6 @@ def EKF_prediction(F, X, P, Q):
 
 	return X, P
 
-innovations = []
 
 def EKF_update_RP(X, P, a, R):
 	w = X[0,0]
@@ -399,15 +400,14 @@ def EKF_update_RP(X, P, a, R):
 	S_inv = np.linalg.inv(S)
 	K = np.matmul(P, np.matmul(H.T, S_inv))
 	innovation = y_obs - h_x
-	residual = innovation#np.array([euler[0:2, 0]]).T - y_obs
+	# residual = innovation#np.array([euler[0:2, 0]]).T - y_obs
 
 	X = X + np.matmul(K, innovation)
 	I = np.eye(P.shape[0])
 	P = np.matmul(I - np.matmul(K, H), P)
-	euler = np.array([QuaterniontoEuler(X)]).T
+	# euler = np.array([QuaterniontoEuler(X)]).T
 
 
-	innovations.append(residual.tolist())
 
 	return X, P
 
@@ -503,7 +503,7 @@ def main(args):
 
 	# Update Accelerometer Cutoff
 	cutoff = 8.*ax_std
-	print cutoff
+	# print cutoff
 
 
 	X = np.array([[1.],[0.],[0.],[0.]])
@@ -575,7 +575,7 @@ def main(args):
 		F = calculate_F(gyros, dt[0])
 		
 		# UKF Prediction
-		sigma_points, state_weights, cov_weights = unscented_transformation(X, P)
+		sigma_points, state_weights, cov_weights = unscented_transformation(X, P, beta=0.)
 		X, P = prediction(F, sigma_points, state_weights, cov_weights, Q)
 		
 		# EKF Prediction
@@ -584,18 +584,18 @@ def main(args):
 
 
 		X = np.array([normalize_quaterion(X.T[0])]).T
-
+		# Madgwick Prediction
 		Q_madg = madgwick_prediction(Q_madg, gyros, dt[0])
 		# Madgwick Update
-		Q_madg = madgwick_update(Q_madg, a, dt[0], 0.2)
-		quat_madg.append(Q_madg)
-		rpy_madg_vals = QuaterniontoEuler(Q_madg)
-		rpy_madg.append(rpy_madg_vals)
+		beta = math.sqrt(0.75*gyro_noise_std)
+		Q_madg = madgwick_update(Q_madg, a, dt[0], beta)
 		# print X
 		# UPDATE
 
-
-
+		y_obs = np.rad2deg(np.array([[math.atan(ax/az)], [math.atan((ay/norm)/math.sqrt(ax*ax*(1/norm*norm) + az*az*(1/norm*norm)))]]))
+		euler = np.array([QuaterniontoEuler(X[:,0])]).T
+		residual = np.array([euler[0:2, 0]]).T - y_obs
+		# if (abs(residual[0,0]) < 1. and abs(residual[1,0]) < 1.) or times[i] < 10.:
 		if (abs(a_diff[0]) < cutoff and abs(a_diff[1]) < cutoff and abs(a_diff[2]) < cutoff):
 			update_times.append(times[i,0])
 
@@ -604,17 +604,32 @@ def main(args):
 			R_l = np.array([[ax_var, 0.0, 0.0], [0.0, ay_var, 0.0], [0.0, 0.0, az_var]])
 			R = np.matmul(M, np.matmul(R_l, M.T))
 			
+
+
+
+
 			# EKF Update
 			# X, P = EKF_update_RP(X, P, a, R)
 
 
 
 			# # UKF Update
-			sigma_points, state_weights, cov_weights = unscented_transformation(X, P)
+			sigma_points, state_weights, cov_weights = unscented_transformation(X, P, beta=0.)
 			X, P = update_RP(X, P, a, sigma_points, state_weights, cov_weights, R)
 
 			X = np.array([normalize_quaterion(X.T[0])]).T
 
+
+
+			y_obs = np.rad2deg(np.array([[math.atan(ax/az)], [math.atan(ay/math.sqrt(ax*ax + az*az))]]))
+			euler = np.array([QuaterniontoEuler(X[:,0])]).T
+			residual = np.array([euler[0:2, 0]]).T - y_obs
+			innovations.append(residual.tolist())
+
+
+		quat_madg.append(Q_madg)
+		rpy_madg_vals = QuaterniontoEuler(Q_madg)
+		rpy_madg.append(rpy_madg_vals)
 
 		res = [X[0, 0], X[1, 0], X[2, 0], X[3, 0]]
 		quat_res.append(res)
@@ -636,6 +651,8 @@ def main(args):
 	plt.plot(quat_times, np.array(quat_res)[:,2], label="q2")
 	plt.plot(quat_times, np.array(quat_res)[:,3], label="q3")
 	plt.title("Estimated Q")
+	plt.xlabel("Time (sec)")
+	plt.ylabel("Quaternion")
 	plt.legend()
 
 
@@ -646,6 +663,8 @@ def main(args):
 	plt.plot(quat_times, np.array(quat_madg)[:,2], label="q2")
 	plt.plot(quat_times, np.array(quat_madg)[:,3], label="q3")
 	plt.title("Madgwick Q")
+	plt.xlabel("Time (sec)")
+	plt.ylabel("Quaternion")
 	plt.legend()
 
 
@@ -656,6 +675,8 @@ def main(args):
 		plt.plot(quat_times, np.array(quat_true)[:len(quat_times), 2], label="q2")
 		plt.plot(quat_times, np.array(quat_true)[:len(quat_times), 3], label="q3")
 		plt.title("True Q")
+		plt.xlabel("Time (sec)")
+		plt.ylabel("Quaternion")
 		plt.legend()
 	except:
 		plt.close()
@@ -674,6 +695,8 @@ def main(args):
 		plt.plot(quat_times, np.array(gyro)[:, 1], label="p")
 		plt.plot(quat_times, np.array(gyro)[:, 2], label="y")
 		plt.title("Gyros")
+		plt.xlabel("Time (sec)")
+		plt.ylabel("Rad/S")
 		plt.legend()
 	except:
 		plt.close()
@@ -684,15 +707,46 @@ def main(args):
 		plt.plot(quat_times, np.array(acc)[:, 1], label="y")
 		plt.plot(quat_times, np.array(acc)[:, 2], label="z")
 		plt.title("Acc")
+		plt.xlabel("Time (sec)")
+		plt.ylabel("Acceleration (g)")
 		plt.legend()
 	except:
 		plt.close()
+
+
 	# print np.array(innovations)
-	# plt.figure()
-	# plt.plot(np.array(innovations)[:,0], '.', label="Col 1")
-	# plt.plot(np.array(innovations)[:,1], '.', label="Col 2")
-	# plt.legend()
-	# plt.title("Residual")
+	plt.figure()
+	plt.plot(np.array(innovations)[:,0], '.', label="Roll")
+	plt.plot(np.array(innovations)[:,1], '.', label="Pitch")
+	plt.xlabel("Time (sec)")
+	plt.ylabel("Error (deg)")
+	plt.legend()
+	plt.title("Residual")
+
+	# Residual Histogram
+	plt.figure()
+	n, bins, patches = plt.hist(np.array(innovations)[:,0], 50, facecolor='g', alpha=0.75)
+	mu = np.mean(np.array(innovations)[:,0])
+	sigma = np.std(np.array(innovations)[:,0])
+	y = np.mean(n)*((1 / (np.sqrt(2 * np.pi) * sigma)) * np.exp(-0.5 * (1 / sigma * (bins - mu))**2))
+
+	plt.plot(bins, y, 'b')
+	plt.xlabel('Error deg')
+	plt.ylabel('Probability')
+	plt.title('Roll Residual: mean = {0}, std = {1}'.format(mu, sigma))
+
+
+	plt.figure()
+	n, bins, patches = plt.hist(np.array(innovations)[:,1], 20, facecolor='g', alpha=0.75)
+	mu = np.mean(np.array(innovations)[:,1])
+	sigma = np.std(np.array(innovations)[:,1])
+	y = np.mean(n)*((1 / (np.sqrt(2 * np.pi) * sigma)) * np.exp(-0.5 * (1 / sigma * (bins - mu))**2))
+
+	plt.plot(bins, y, 'b')
+	plt.xlabel('Error deg')
+	plt.ylabel('Probability')
+	plt.title('Pitch Residual: mean = {0}, std = {1}'.format(mu, sigma))
+
 
 
 	plt.figure()
@@ -700,12 +754,16 @@ def main(args):
 	plt.plot(quat_times, np.array(rpy_res)[:,1], label="Pitch")
 	plt.plot(quat_times, np.array(rpy_res)[:,2], label="Yaw")
 	plt.legend()
+	plt.xlabel("Time (sec)")
+	plt.ylabel("Euler Angles (Degrees)")
 	plt.title("Estimated RPY")
 
 	plt.figure()
 	plt.plot(quat_times, np.array(rpy_madg)[:,0], label="Roll")
 	plt.plot(quat_times, np.array(rpy_madg)[:,1], label="Pitch")
 	plt.plot(quat_times, np.array(rpy_madg)[:,2], label="Yaw")
+	plt.xlabel("Time (sec)")
+	plt.ylabel("Euler Angles (Degrees)")
 	plt.legend()
 	plt.title("Madgwick RPY")
 
@@ -715,6 +773,8 @@ def main(args):
 		plt.plot(quat_times, np.array(rpy_true)[:,1], label="Pitch")
 		plt.plot(quat_times, np.array(rpy_true)[:,2], label="Yaw")
 		plt.legend()
+		plt.xlabel("Time (sec)")
+		plt.ylabel("Euler Angles (Degrees)")
 		plt.title("True RPY")
 	except:
 		plt.close()
@@ -726,6 +786,8 @@ def main(args):
 	plt.plot(quat_times, np.array(P_vals)[:,1], label="q1")
 	plt.plot(quat_times, np.array(P_vals)[:,2], label="q2")
 	plt.plot(quat_times, np.array(P_vals)[:,2], label="q3")
+	plt.xlabel("Time (sec)")
+	plt.ylabel("Uncertainty (Unit Q^2)")
 	plt.legend()
 	plt.title("Estimated Variance")
 
